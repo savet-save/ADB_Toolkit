@@ -516,7 +516,7 @@ const GJTransport = (() => {
   async function authenticate(connection,serial,closeOwned,signal){GJ.checkAbort(signal);let cancelled=false,rejectCancel;const cancelPromise=new Promise((_,reject)=>rejectCancel=reject);const stop=()=>{cancelled=true;void closeOwned().catch(()=>{});rejectCancel(signal?.reason||new Error('认证超时，请在手机上允许 USB 调试后重试'));};const timer=setTimeout(stop,60000);signal?.addEventListener('abort',stop,{once:true});const auth=adbLib.AdbDaemonTransport.authenticate({serial,connection,credentialStore:new CredentialStore('搞机工具箱')});auth.then(transport=>{if(cancelled)void transport.close().catch(()=>{});},()=>{});try{const transport=await Promise.race([auth,cancelPromise]);GJ.checkAbort(signal);return new adbLib.Adb(transport);}catch(error){cancelled=true;await closeOwned().catch(()=>{});throw error;}finally{clearTimeout(timer);signal?.removeEventListener('abort',stop);}}
   async function connectUsb({device,signal}={}){if(!manager)throw new Error('当前浏览器不支持 WebUSB，请使用 Chrome / Edge 并通过 HTTPS 或 localhost 打开');const selected=device||await manager.requestDevice();if(!selected)throw new DOMException('未选择设备','AbortError');GJ.checkAbort(signal);const close=()=>selected.raw.close();try{const connection=await selected.connect();GJ.checkAbort(signal);const adb=await authenticate(connection,selected.serial,close,signal);return new Driver(adb,{serial:selected.serial,label:selected.name||selected.serial,closeOwned:close});}catch(error){await close().catch(()=>{});if(error.name==='DeviceBusyError'||/already.*use|claim.*interface/i.test(error.message))throw new Error('当前adb接口被占用，请在任务管理器中手动结束adb.exe进程');throw error;}}
   function supportsWireless() {
-    return location.protocol==='http:'&&['127.0.0.1','localhost'].includes(location.hostname);
+    return ['http:','https:'].includes(location.protocol)&&['127.0.0.1','localhost'].includes(location.hostname);
   }
 
   function wirelessAddress(value,defaultPort) {
@@ -547,7 +547,8 @@ const GJTransport = (() => {
 
   async function byteChannel(route,signals) {
     signals.forEach(GJ.checkAbort);
-    const socket=new WebSocket('ws://'+location.host+route);
+    const protocol=location.protocol==='https:'?'wss:':'ws:';
+    const socket=new WebSocket(protocol+'//'+location.host+route);
     socket.binaryType='arraybuffer';
     let controller,resolveClosed,rejectClosed,markOpen,failOpen,finished=false;
     const opened=new Promise((resolve,reject)=>{markOpen=resolve;failOpen=reject;});

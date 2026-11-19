@@ -72,6 +72,55 @@ node server.cjs
 
 **请通过网页服务器打开分离版。** 直接双击 `index.html` 会使用 `file://` 地址，外部 ES 模块可能因浏览器的跨源限制而加载失败，导致连接按钮不可用。参见 [MDN：JavaScript 模块](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)。
 
+#### 本机 HTTPS
+
+在启动 `server.cjs` 前设置 `HTTPS_CERT` 和 `HTTPS_KEY`，分别指向 PEM 格式证书和私钥。服务只监听本机地址，ADB 桥接会自动使用同源 WSS。将私钥存放在项目目录之外。
+
+在 Windows PowerShell 中先设置文件路径。已有证书时，可以将下面两个变量改为实际路径。
+
+```powershell
+$gjTls = Join-Path $env:LOCALAPPDATA 'ADB_Toolkit\https'
+$env:HTTPS_CERT = Join-Path $gjTls 'localhost.crt'
+$env:HTTPS_KEY = Join-Path $gjTls 'localhost.key'
+```
+
+首次生成证书时运行下面的命令。若 `PATH` 中找不到 OpenSSL，命令会查找 Git for Windows 自带的 OpenSSL。
+
+```powershell
+if ((Test-Path -LiteralPath $env:HTTPS_CERT) -or (Test-Path -LiteralPath $env:HTTPS_KEY)) {
+  throw '目标路径中已有证书或私钥。请复用现有文件，或为新证书指定其他路径。'
+}
+$gjOpenSsl = (Get-Command openssl.exe -ErrorAction SilentlyContinue).Source
+$gjSslConfig = @()
+if (-not $gjOpenSsl) {
+  $gjGit = (Get-Command git.exe -ErrorAction Stop).Source
+  $gjGitTools = Split-Path -Parent (Split-Path -Parent (& $gjGit --exec-path))
+  $gjOpenSsl = Join-Path $gjGitTools 'bin\openssl.exe'
+  $gjSslConfig = @('-config', (Join-Path $gjGitTools 'etc\ssl\openssl.cnf'))
+}
+if (-not (Test-Path -LiteralPath $gjOpenSsl -PathType Leaf)) {
+  throw '找不到 OpenSSL。请安装 OpenSSL，或使用已有的 PEM 证书和私钥。'
+}
+New-Item -ItemType Directory -Force -Path $gjTls | Out-Null
+$gjSslArgs = @(
+  '-x509', '-newkey', 'rsa:2048', '-nodes', '-sha256', '-days', '365',
+  '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1',
+  '-addext', 'basicConstraints=critical,CA:FALSE', '-addext', 'extendedKeyUsage=serverAuth',
+  '-keyout', $env:HTTPS_KEY, '-out', $env:HTTPS_CERT
+)
+& $gjOpenSsl req @gjSslConfig @gjSslArgs
+if ($LASTEXITCODE -ne 0) { throw '证书生成失败。' }
+```
+
+证书和私钥就绪后启动服务。
+
+```powershell
+$env:PORT = '8443'
+node server.cjs
+```
+
+打开 [本机 HTTPS 页面](https://127.0.0.1:8443)。若 Chrome 或 Edge 提示证书不受信任，可将自己生成的公开证书 `localhost.crt` 导入当前 Windows 用户的「受信任的根证书颁发机构」。[OpenSSL 自签名证书命令](https://docs.openssl.org/3.3/man1/openssl-req/) · [Edge 的本机证书信任说明](https://learn.microsoft.com/en-us/deployedge/microsoft-edge-security-cert-verification)
+
 ### 本机与无线 ADB
 
 1. 安装 Node.js 18 或更高版本及 [Android SDK Platform-Tools](https://developer.android.com/tools/releases/platform-tools)。将 Platform-Tools 加入 `PATH`，或将环境变量 `ADB_PATH` 设置为 `adb` 可执行文件的完整路径。
