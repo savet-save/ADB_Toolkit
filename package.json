@@ -1,0 +1,11 @@
+{
+  "name": "gjgjxweb",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "ws": "8.23.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
