@@ -53,20 +53,175 @@ body[data-connected="false"] .sidebar,body[data-connected="false"] .page,body[da
 .local-adb-devices .field-row{flex-wrap:wrap}
 .local-adb-devices .field{min-width:min(100%,220px)}
 #local-adb-status:empty{display:none}
-.gamepad-controls{max-width:600px;min-width:0;padding:12px 0 0;border:0;margin:auto;user-select:none}
-.gamepad-controls button,.gamepad-stick{touch-action:none}
-.gamepad-controls .held{background:var(--brand);border-color:var(--brand);color:#fff}
-.gamepad-shoulders,.gamepad-analog{display:flex;align-items:center;justify-content:space-between;gap:8px}
-.gamepad-shoulders [data-gamepad-control="l1"]{margin-right:auto}
-.gamepad-main{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;margin:14px 0}
-.gamepad-cross{display:grid;grid-template-columns:repeat(3,clamp(30px,8vw,45px));gap:4px}
-.gamepad-cross .btn{padding:0;min-height:clamp(30px,8vw,45px)}
+#page-gamepad{max-width:1040px;margin-inline:auto}
+#page-gamepad:focus{outline:none}
+.gamepad-panel{
+  container:gamepad / inline-size;
+  padding:clamp(12px,3vw,30px);
+  color:#e7eef9;
+  background:
+    radial-gradient(ellipse at 2% 0%,#344662aa,transparent 58%),
+    radial-gradient(ellipse at 100% 8%,#263d59aa,transparent 55%),
+    linear-gradient(155deg,#182639,#0c1422 76%);
+  border:1px solid #31445c;
+  border-radius:26px;
+  box-shadow:0 14px 30px #18283925,inset 0 1px #ffffff17;
+}
+.gamepad-controls{
+  --pad-accent:#7cc1ff;
+  --pad-key-size:clamp(40px,6.7cqw,56px);
+  --pad-key-gap:clamp(5px,1.1cqw,9px);
+  --pad-cross-size:calc(var(--pad-key-size) * 3 + var(--pad-key-gap) * 2);
+  --pad-stick-size:clamp(90px,15cqw,140px);
+  --pad-upper-offset:clamp(18px,4.5cqw,46px);
+  display:grid;
+  grid-template-columns:minmax(var(--pad-stick-size),1fr) minmax(var(--pad-cross-size),1fr) minmax(var(--pad-stick-size),1fr) minmax(var(--pad-cross-size),1fr);
+  grid-template-areas:
+    "left-shoulders status status right-shoulders"
+    "left-stick middle middle face"
+    ". directions right-stick .";
+  align-items:center;
+  gap:clamp(8px,1.6cqw,16px);
+  min-inline-size:0;
+  margin:0;
+  padding:0;
+  border:0;
+  user-select:none;
+}
+.gamepad-status{
+  grid-area:status;
+  justify-self:center;
+  display:flex;
+  align-items:baseline;
+  gap:8px;
+  margin:0;
+  color:#b9c8df;
+  font-size:12px;
+  overflow-wrap:anywhere;
+}
+.gamepad-status::before{
+  content:"";
+  inline-size:7px;
+  block-size:7px;
+  flex:none;
+  border-radius:50%;
+  background:#8495b0;
+}
+.gamepad-status[data-state="ready"]{color:#cbe8df}
+.gamepad-status[data-state="ready"]::before{background:#63e6b7;box-shadow:0 0 10px #63e6b788}
+.gamepad-status[data-state="pending"]::before{background:#ffcb72}
+.gamepad-status[data-state="error"]{color:#ffb5bf}
+.gamepad-status[data-state="error"]::before{background:#ff8597}
+.gamepad-key{
+  display:grid;
+  place-items:center;
+  min-height:42px;
+  padding:0 8px;
+  color:var(--key-accent,#e1e9f8);
+  background:linear-gradient(154deg,#35445a,#1a2639 75%);
+  border:1px solid #4a5e77;
+  border-radius:10px;
+  box-shadow:inset 0 1px #ffffff1f,0 3px 0 #0b1421,0 6px 11px #060d1870;
+  font-weight:700;
+  line-height:1.1;
+  touch-action:none;
+  transition:background .13s,border-color .13s,box-shadow .13s,transform .13s;
+}
+.gamepad-key:hover:not(:disabled){background:linear-gradient(154deg,#405572,#253650)}
+.gamepad-key:focus-visible{outline:2px solid #acd7ff;outline-offset:3px}
+.gamepad-key.held,.gamepad-key:active:not(:disabled){
+  border-color:var(--key-accent,var(--pad-accent));
+  background:color-mix(in srgb,var(--key-accent,var(--pad-accent)) 24%,#18283f);
+  box-shadow:inset 0 2px 5px #0d1727,0 0 9px color-mix(in srgb,var(--key-accent,var(--pad-accent)) 38%,transparent);
+  transform:translateY(2px);
+}
+.gamepad-controls:disabled .gamepad-key{opacity:.6}
+.gamepad-shoulders{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--pad-key-gap)}
+.gamepad-shoulders-left{grid-area:left-shoulders}
+.gamepad-shoulders-right{grid-area:right-shoulders}
+.gamepad-shoulders-left .gamepad-key:first-child{border-top-left-radius:20px}
+.gamepad-shoulders-right .gamepad-key:last-child{border-top-right-radius:20px}
+.gamepad-cross{
+  display:grid;
+  grid-template:repeat(3,var(--pad-key-size)) / repeat(3,var(--pad-key-size));
+  justify-self:center;
+  gap:var(--pad-key-gap);
+}
+.gamepad-cross .gamepad-key{min-height:0;padding:0}
 .gp-top{grid-area:1 / 2}.gp-left{grid-area:2 / 1}.gp-right{grid-area:2 / 3}.gp-bottom{grid-area:3 / 2}
-.gamepad-center{display:flex;justify-content:center;flex-wrap:wrap;gap:6px}
-.gamepad-analog{justify-content:space-evenly}
-.gamepad-stick-group{display:grid;justify-items:center;gap:8px}
-.gamepad-stick{display:grid;place-items:center;width:clamp(76px,15vw,108px);aspect-ratio:1;border:1px solid var(--line);border-radius:50%;background:var(--brand-soft);cursor:grab}
+.gamepad-directions{grid-area:directions}
+.gamepad-directions .gamepad-key{color:#c6d5e8;font-size:15px}
+.gamepad-face{grid-area:face}
+.gamepad-face .gamepad-key{border-radius:50%;font-size:clamp(17px,3cqw,23px)}
+.gamepad-face [data-gamepad-control="a"]{--key-accent:#64e5b6}
+.gamepad-face [data-gamepad-control="b"]{--key-accent:#ff8994}
+.gamepad-face [data-gamepad-control="x"]{--key-accent:#70bbff}
+.gamepad-face [data-gamepad-control="y"]{--key-accent:#c1a9ff}
+.gamepad-center{
+  grid-area:middle;
+  justify-self:center;
+  display:flex;
+  gap:8px;
+  padding:8px;
+  border:1px solid #34465d;
+  border-radius:30px;
+  background:#0a14227d;
+}
+.gamepad-center .gamepad-key{min-height:36px;padding-inline:16px;border-radius:20px;font-size:12px}
+.gamepad-stick-group{display:grid;justify-items:center;justify-self:center;gap:10px}
+.gamepad-stick-left{grid-area:left-stick}
+.gamepad-stick-right{grid-area:right-stick}
+.gamepad-stick-left,.gamepad-face{position:relative;inset-block-start:var(--pad-upper-offset)}
+.gamepad-stick{
+  display:grid;
+  place-items:center;
+  width:var(--pad-stick-size);
+  aspect-ratio:1;
+  border:1px solid #445973;
+  border-radius:50%;
+  background:radial-gradient(circle closest-side,#101723 0 48%,#193655 50% 52%,#4e92ed 53% 55%,#263c5b 57% 72%,#1a273b 74%);
+  box-shadow:inset 0 3px 7px #080f1b,inset 0 -1px #7198c840,0 4px 12px #070d197a;
+  cursor:grab;
+  touch-action:none;
+}
+.gamepad-stick span{
+  width:34%;
+  aspect-ratio:1;
+  border:1px solid #6f89ad;
+  border-radius:50%;
+  background:radial-gradient(circle at 40% 30%,#455871,#27364b 65%,#151e2d);
+  box-shadow:inset 0 1px #ffffff38,0 4px 8px #050910a8;
+  pointer-events:none;
+  transform:translate(var(--stick-x,0%),var(--stick-y,0%));
+}
 .gamepad-stick:active{cursor:grabbing}
-.gamepad-stick span{width:34%;aspect-ratio:1;border:2px solid var(--brand);border-radius:50%;background:var(--surface);pointer-events:none;transform:translate(var(--stick-x,0%),var(--stick-y,0%))}
-.gamepad-controls:disabled .gamepad-stick{opacity:.55;cursor:default}
-@media(max-width:390px){.gamepad-main{grid-template-columns:1fr 1fr;justify-items:center}.gamepad-center{grid-column:1/-1;grid-row:2}}
+.gamepad-controls:disabled .gamepad-stick{opacity:.62;cursor:default}
+.gamepad-stick-key{min-width:44px;min-height:36px;border-radius:18px;font-size:12px}
+.gamepad-shortcuts{display:flex;flex-wrap:wrap;gap:8px 16px;margin:15px 0 0;color:var(--muted);font-size:12px}
+.gamepad-shortcuts span{display:inline-flex;align-items:center;gap:6px}
+.gamepad-shortcuts kbd{
+  padding:1px 6px;
+  color:var(--ink);
+  white-space:nowrap;
+  background:var(--surface);
+  border:1px solid var(--line);
+  border-bottom-width:2px;
+  border-radius:4px;
+}
+@container gamepad (max-width:620px){
+  .gamepad-controls{
+    --pad-key-size:clamp(30px,13cqw,52px);
+    --pad-stick-size:clamp(88px,24cqw,118px);
+    --pad-upper-offset:8px;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    grid-template-areas:
+      "status status"
+      "left-shoulders right-shoulders"
+      "left-stick face"
+      "directions right-stick"
+      "middle middle";
+    row-gap:12px;
+  }
+  .gamepad-center{padding:5px}
+}
+@media (prefers-reduced-motion:reduce){.gamepad-key{transition:none}}

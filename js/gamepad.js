@@ -49,7 +49,7 @@ const GJGamepad=(()=>{
       this.controls.disabled=!this.session?.ready;
       this.toggleButton.textContent=this.session?(this.session.ready?'关闭手柄':'取消启动'):'启用手柄';
       this.status.textContent=message;
-      this.status.classList.toggle('error',error);
+      this.status.dataset.state=error?'error':this.session?(this.session.ready?'ready':'pending'):'idle';
     }
 
     async toggle(driver){
@@ -87,7 +87,7 @@ const GJGamepad=(()=>{
         if(this.session!==session)return;
         session.ready=true;
         this.render('手柄已启用。请在手机上打开支持手柄的应用。');
-        this.page.focus();
+        this.page.focus({preventScroll:true});
         this.sendReport();
       }catch(error){
         if(this.session===session)this.close(diagnostics.trim()||error.message,true);
