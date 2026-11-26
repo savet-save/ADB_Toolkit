@@ -9,6 +9,9 @@ const net=require('node:net');
 const {execFile}=require('node:child_process');
 const {promisify}=require('node:util');
 const root=__dirname,port=Number(process.env.PORT||8124);
+const webRoot=fs.realpathSync(root);
+const tlsDirectory=path.join(webRoot,'.tls');
+const publicDirectories=new Set(['assets','css','docs','js']);
 const {HTTPS_CERT:certPath,HTTPS_KEY:keyPath}=process.env;
 const adbPorts={local:5037,wireless:5038};
 const adbRoutes=new Map([['/api/adb/local-socket',adbPorts.local],['/api/adb/socket',adbPorts.wireless]]);
@@ -30,11 +33,10 @@ function readHttpsOptions(){
   if(!certPath||!keyPath)throw new Error('启用 HTTPS 时请同时设置 HTTPS_CERT 和 HTTPS_KEY');
   const privateKey=path.resolve(keyPath);
   const resolvedKey=fs.realpathSync(privateKey);
-  const webRoot=fs.realpathSync(root);
   for(const filename of [privateKey,resolvedKey]){
     const relative=path.relative(webRoot,filename);
-    if(relative!=='..'&&!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative)){
-      throw new Error('HTTPS 私钥必须放在项目目录之外，以免被静态服务器提供下载');
+    if(relative!=='..'&&!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative)&&path.dirname(filename)!==tlsDirectory){
+      throw new Error('HTTPS 私钥请放在项目的 .tls 目录或项目目录之外');
     }
   }
   return {cert:fs.readFileSync(certPath),key:fs.readFileSync(resolvedKey)};
@@ -87,6 +89,11 @@ async function startAdb(){
 }
 
 async function handleRequest(req,res){
+  if(req.method==='GET'&&req.url==='/healthz'){
+    res.writeHead(200,{'Content-Type':'text/plain; charset=utf-8','Cache-Control':'no-store'});
+    res.end('ADB Toolkit ready');
+    return;
+  }
   if(req.url==='/api/adb/start'||req.url==='/api/adb/servers'){
     if(req.method!=='POST'||!isLocalPage(req)){res.writeHead(403).end();return;}
     try{
@@ -109,7 +116,16 @@ async function handleRequest(req,res){
   let filename;
   try{const pathname=decodeURIComponent(new URL(req.url,'http://localhost').pathname);filename=path.resolve(root,'.'+(pathname==='/'?'/index.html':pathname));}catch{res.writeHead(400);res.end('Bad request');return;}
   if(!filename.startsWith(root+path.sep)){res.writeHead(403);res.end('Forbidden');return;}
-  fs.readFile(filename,(error,data)=>{if(error){res.writeHead(404);res.end('Not found');return;}res.writeHead(200,{'Content-Type':types[path.extname(filename)]||'application/octet-stream','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(data);});
+  const isPublic=file=>{
+    const parts=path.relative(webRoot,file).split(path.sep);
+    return parts.length===1?parts[0]==='index.html':publicDirectories.has(parts[0]);
+  };
+  if(!isPublic(path.join(webRoot,path.relative(root,filename)))){res.writeHead(403).end('Forbidden');return;}
+  fs.realpath(filename,(error,resolved)=>{
+    if(error){res.writeHead(404).end('Not found');return;}
+    if(!isPublic(resolved)){res.writeHead(403).end('Forbidden');return;}
+    fs.readFile(resolved,(readError,data)=>{if(readError){res.writeHead(404);res.end('Not found');return;}res.writeHead(200,{'Content-Type':types[path.extname(filename)]||'application/octet-stream','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(data);});
+  });
 }
 
 const tls=readHttpsOptions();

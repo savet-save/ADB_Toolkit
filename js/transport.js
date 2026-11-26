@@ -39,7 +39,7 @@ const GJTransport = (() => {
     async close(){if(this.closing)return this.closing;this.connected=false;this.closing=(async()=>{for(const process of this.processes)await Promise.resolve(process.kill()).catch(()=>{});this.processes.clear();for(const s of this.sessions)await s.dispose().catch(()=>{});try{await this.adb.close();}finally{await this.closeOwned();}})();return this.closing;}
   }
   async function authenticate(connection,serial,closeOwned,signal){GJ.checkAbort(signal);let cancelled=false,rejectCancel;const cancelPromise=new Promise((_,reject)=>rejectCancel=reject);const stop=()=>{cancelled=true;void closeOwned().catch(()=>{});rejectCancel(signal?.reason||new Error('认证超时，请在手机上允许 USB 调试后重试'));};const timer=setTimeout(stop,60000);signal?.addEventListener('abort',stop,{once:true});const auth=adbLib.AdbDaemonTransport.authenticate({serial,connection,credentialStore:new CredentialStore('搞机工具箱')});auth.then(transport=>{if(cancelled)void transport.close().catch(()=>{});},()=>{});try{const transport=await Promise.race([auth,cancelPromise]);GJ.checkAbort(signal);return new adbLib.Adb(transport);}catch(error){cancelled=true;await closeOwned().catch(()=>{});throw error;}finally{clearTimeout(timer);signal?.removeEventListener('abort',stop);}}
-  async function connectUsb({device,signal}={}){if(!manager)throw new Error('当前浏览器不支持 WebUSB，请使用 Chrome / Edge 并通过 HTTPS 或 localhost 打开');const selected=device||await manager.requestDevice();if(!selected)throw new DOMException('未选择设备','AbortError');GJ.checkAbort(signal);const close=()=>selected.raw.close();try{const connection=await selected.connect();GJ.checkAbort(signal);const adb=await authenticate(connection,selected.serial,close,signal);return new Driver(adb,{serial:selected.serial,label:selected.name||selected.serial,closeOwned:close});}catch(error){await close().catch(()=>{});if(error.name==='DeviceBusyError'||/already.*use|claim.*interface/i.test(error.message))throw new Error('当前adb接口被占用，请在任务管理器中手动结束adb.exe进程');throw error;}}
+  async function connectUsb({device,signal,current}={}){if(!manager)throw new Error('当前浏览器不支持 WebUSB，请使用 Chrome / Edge 并通过 HTTPS 或 localhost 打开');const selected=device||await manager.requestDevice();if(!selected)throw new DOMException('未选择设备','AbortError');GJ.checkAbort(signal);if(current?.connected&&current.kind==='usb'&&current.serial===selected.serial)return current;const close=()=>selected.raw.close();try{const connection=await selected.connect();GJ.checkAbort(signal);const adb=await authenticate(connection,selected.serial,close,signal);return new Driver(adb,{serial:selected.serial,label:selected.name||selected.serial,closeOwned:close});}catch(error){await close().catch(()=>{});if(error.name==='DeviceBusyError'||/already.*use|claim.*interface/i.test(error.message))throw new Error('当前adb接口被占用，请在任务管理器中手动结束adb.exe进程');throw error;}}
   function supportsWireless() {
     return ['http:','https:'].includes(location.protocol)&&['127.0.0.1','localhost'].includes(location.hostname);
   }
@@ -180,14 +180,16 @@ const GJTransport = (() => {
 
   async function openAdbDevice(client,device,kind,closeOwned) {
     const adb=await client.createAdb({transportId:device.transportId});
-    return new Driver(adb,{serial:device.serial,label:device.model||device.serial,kind,closeOwned});
+    const driver=new Driver(adb,{serial:device.serial,label:device.model||device.serial,kind,closeOwned});
+    driver.server=device.server;
+    return driver;
   }
 
   async function connectLocalDevice({device,signal}) {
     return withServer(signal,async(client,_,close)=>{
       const selected=(await client.getDevices(deviceStates)).find(entry=>entry.serial===device.serial);
       if(selected?.state!=='device')throw new Error('所选设备已离线或未授权，请刷新本机设备列表');
-      return openAdbDevice(client,selected,'local',close);
+      return openAdbDevice(client,{...selected,server:device.server},device.server==='wireless'?'wireless':'local',close);
     },{server:device.server,start:false,keepOpen:true});
   }
 
@@ -217,7 +219,7 @@ const GJTransport = (() => {
       let selected;
       do{
         selected=(await client.getDevices(['device','unauthorized','offline'])).find(device=>device.serial===target);
-        if(selected?.state==='device')return openAdbDevice(client,selected,'wireless',close);
+        if(selected?.state==='device')return openAdbDevice(client,{...selected,server:'wireless'},'wireless',close);
         await GJ.sleep(300,setupSignal);
       }while(Date.now()<deadline);
       throw new Error(selected?.state==='unauthorized'?'请在手机上允许调试，或重新配对':'设备尚未上线，请确认手机仍开启无线调试后重试');

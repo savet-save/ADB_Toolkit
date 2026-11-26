@@ -20,6 +20,10 @@ import {GJGamepad} from "./gamepad.js";
   let history=store.get('history',[]);if(!Array.isArray(history))history=[];
   const screenshotFiles=[],associatedFiles=new Map(),stats={running:false,rows:[],model:'未知机型',start:0,last:0,recordPower:false,interval:3000};
   let wirelessAddress='';
+  let manualDisconnect=false;
+  let pageHideCleanup;
+  let reconnectTimer;
+  let lastConnectedPage=store.get('lastConnectedPage',null);
   let librariesReady=false,polling=false,lastCpu=0,lastFocus=0,lastBattery=0,modalResolve=null;
   const activeControls=new Set();
   function toast(message,error=false){const item=document.createElement('div');item.className='toast'+(error?' error':'');item.textContent=String(message);$('toasts').appendChild(item);setTimeout(()=>item.remove(),error?7000:4000);}
@@ -27,7 +31,7 @@ import {GJGamepad} from "./gamepad.js";
   function output(kind,text){terminalView?.activity(kind,text);}
   function clearTerminal(){terminalView?.clear();}
   function syncTerminalUi(message){if(message!==undefined)$('terminal-status').textContent=message;$('terminal-stop').disabled=!terminalView?.active;$('terminal-restart').disabled=!driver?.connected||!!terminalView?.starting;}
-  function syncConnectionUi(){const connected=!!driver?.connected;document.body.dataset.connected=String(connected);if(!connected)$('sidebar').classList.remove('open');$('connect-device').textContent=connectionAbort?'取消连接':'USB 连接';$('connect-device').disabled=connectionAbort?false:!librariesReady||busy>0;$('connect-wireless').disabled=!librariesReady||!!connectionAbort||busy>0;$('device-connection-method').textContent=driver?.kind==='wireless'?'无线 ADB · '+driver.serial:driver?.kind==='local'?'本机 ADB · '+driver.serial:'USB 调试';$$('[data-device]').forEach(el=>el.disabled=!connected||activeControls.has(el));$('disconnect').hidden=!connected&&!connectionAbort;$('connect-usb').disabled=!librariesReady||!!connectionAbort||connected||busy>0;$('connection-label').textContent=connected?(driver.label||driver.serial):connectionAbort?'等待设备授权':'未连接设备';if(connected)$('connection-dot').className='dot ok';$('script-stop').disabled=!runner.running;$('script-run').disabled=!connected||runner.running||activeControls.has($('script-run'));if(!connected)terminalView?.close();syncTerminalUi();$('battery-start').textContent=stats.running?'停止':'开始';$('package-name').readOnly=preferences.autoFill;$('device-select').disabled=busy>0||!!connectionAbort;}
+  function syncConnectionUi(){const connected=!!driver?.connected;document.body.dataset.connected=String(connected);if(!connected)$('sidebar').classList.remove('open');$('connect-device').textContent=connectionAbort?'取消连接':'USB 连接';$('connect-device').disabled=connectionAbort?false:!librariesReady||busy>0;$('connect-wireless').disabled=!librariesReady||!!connectionAbort||busy>0;$('device-connection-method').textContent=driver?.kind==='wireless'?'无线 ADB · '+driver.serial:driver?.kind==='local'?'本机 ADB · '+driver.serial:'USB 调试';$$('[data-device]').forEach(el=>el.disabled=!connected||activeControls.has(el));$('disconnect').hidden=!connected&&!connectionAbort;$('connect-usb').disabled=!librariesReady||!!connectionAbort||busy>0;$('connection-label').textContent=connected?(driver.label||driver.serial):connectionAbort?'等待设备授权':'未连接设备';if(connected)$('connection-dot').className='dot ok';$('script-stop').disabled=!runner.running;$('script-run').disabled=!connected||runner.running||activeControls.has($('script-run'));if(!connected)terminalView?.close();syncTerminalUi();$('battery-start').textContent=stats.running?'停止':'开始';$('package-name').readOnly=preferences.autoFill;$('device-select').disabled=busy>0||!!connectionAbort;}
   function applyTheme(){const colors={teal:['#0097a7','#007f8c','#d9eef0'],indigo:['#4657be','#34449e','#e3e7fa'],bluegrey:['#455a64','#32464f','#e1e9ed'],green:['#39845b','#2b6847','#e1efe6'],purple:['#8651b5','#6a3c96','#eee5f6']};const c=colors[preferences.theme]||colors.indigo;['--brand','--brand-dark','--brand-soft'].forEach((k,i)=>document.documentElement.style.setProperty(k,c[i]));}
   function updateHeaderHeight(){document.documentElement.style.setProperty('--header-height',document.querySelector('.topbar').getBoundingClientRect().height/(preferences.uiScale/100)+'px');}
   function applyInterfaceScale(){const scale=preferences.uiScale/100;document.documentElement.style.setProperty('--ui-scale',String(scale));document.documentElement.style.zoom=String(scale);updateHeaderHeight();terminalView?.fit();}
@@ -57,6 +61,7 @@ import {GJGamepad} from "./gamepad.js";
   function renderBoardId(){$('board-id-value').textContent=boardIdHidden?'*'.repeat(Array.from(String(boardIdValue)).length):boardIdValue;const button=$('board-id-toggle');button.textContent=boardIdHidden?'显示':'隐藏';button.setAttribute('aria-pressed',String(boardIdHidden));button.setAttribute('aria-label',boardIdHidden?'显示主板 ID':'隐藏主板 ID');}
   function resetInfo(){$$('[data-info]').forEach(el=>el.textContent='—');boardIdValue='—';renderBoardId();$('cpu-grid').innerHTML='<span>CPU 频率</span><span>—</span>';$('focused-package').textContent='—';$('focused-activity').textContent='—';$('battery-summary').textContent='电量：—　电压：—　温度：—';$('battery-raw').textContent='连接设备后读取电池信息';$('resolution-info').textContent='分辨率：—';$('density-info').textContent='显示密度：—　最小宽度：—';}
   async function detach(message='已断开连接',kind=''){
+    clearTimeout(reconnectTimer);
     epoch++;
     modelReady=Promise.resolve('未知机型');
     connectionAbort?.abort(GJ.abortError());
@@ -76,16 +81,21 @@ import {GJGamepad} from "./gamepad.js";
     await old?.close().catch(()=>{});
   }
 
-  async function attach(next){
+  async function attach(next,restorePage){
     await detach();
+    if(restorePage&&Object.hasOwn(GJ.pages,lastConnectedPage))await navigate(lastConnectedPage);
     driver=next;
+    manualDisconnect=false;
+    store.set('lastDevice',{serial:next.serial,kind:next.kind,server:next.server});
+    rememberConnectedPage();
     service.driver=next;
     const myEpoch=++epoch;
     status(next.label||next.serial,'ok');
     const onDisconnect=async error=>{
       if(driver!==next||epoch!==myEpoch)return;
       await detach(error?'连接已断开：'+error.message:'设备已断开',error?'error':'');
-      await refreshDevices();
+      scheduleReconnect();
+      await refreshDevices().catch(()=>{});
     };
     next.disconnected.then(()=>onDisconnect(),onDisconnect).catch(()=>{});
     modelReady=service.getDeviceName().catch(()=>'未知机型');
@@ -97,7 +107,7 @@ import {GJGamepad} from "./gamepad.js";
     lastCpu=0;
   }
 
-  async function connect(open,message){
+  async function connect(open,message,{restorePage=false}={}){
     if(!librariesReady)throw new Error('ADB 依赖尚未加载完成');
     if(connectionAbort)return;
     const abort=new AbortController();
@@ -106,9 +116,13 @@ import {GJGamepad} from "./gamepad.js";
     syncConnectionUi();
     try{
       const next=await open(abort.signal);
-      if(abort.signal.aborted){await next.close();return;}
+      if(abort.signal.aborted){if(next!==driver)await next?.close();return;}
+      if(!next||next===driver){
+        status(driver?.label||driver?.serial||'请选择连接方式',driver?'ok':'');
+        return;
+      }
       connectionAbort=null;
-      await attach(next);
+      await attach(next,restorePage);
     }finally{
       if(connectionAbort===abort)connectionAbort=null;
       syncConnectionUi();
@@ -116,7 +130,7 @@ import {GJGamepad} from "./gamepad.js";
   }
 
   async function connectUsb(device){
-    return connect(signal=>GJTransport.connectUsb({device,signal}),'请选择设备，并在手机上确认 USB 调试授权');
+    return connect(signal=>GJTransport.connectUsb({device,signal,current:driver}),'请选择设备，并在手机上确认 USB 调试授权');
   }
 
   async function openWirelessDialog(){
@@ -233,9 +247,64 @@ import {GJGamepad} from "./gamepad.js";
     wirelessAddress=target.address;
     await connect(signal=>GJTransport.connectWireless({address:wirelessAddress,signal}),'正在连接无线 ADB。若手机提示，请允许调试。');
   }
-  async function autoConnectAuthorized(devices){if(!preferences.autoConnectAuthorized||!librariesReady||driver?.connected||connectionAbort||busy)return;if(devices.length>1){toast('检测到多台已授权设备，请点击连接设备手动选择');return;}if(devices.length===1)await perform(()=>connectUsb(devices[0]));}
+  function canRestoreConnection(){
+    return preferences.autoConnectAuthorized&&librariesReady&&!driver?.connected&&
+      !manualDisconnect&&!document.hidden;
+  }
+
+  function scheduleReconnect(attempt=0){
+    clearTimeout(reconnectTimer);
+    if(attempt>=5||!canRestoreConnection())return;
+    const expectedEpoch=epoch;
+    reconnectTimer=setTimeout(async()=>{
+      if(epoch!==expectedEpoch||!canRestoreConnection())return;
+      await restoreConnection().catch(showError);
+      if(epoch===expectedEpoch)scheduleReconnect(attempt+1);
+    },1000*2**attempt);
+  }
+
+  async function restoreConnection(){
+    if(!canRestoreConnection()||connectionAbort||busy||$('modal').open)return;
+    await connect(async signal=>{
+      const last=store.get('lastDevice',null);
+      const [usb,local]=await Promise.all([
+        GJTransport.devices().catch(()=>[]),
+        GJTransport.supportsWireless()?GJTransport.listLocalDevices({signal}).then(result=>result.devices).catch(()=>[]):[]
+      ]);
+      const candidates=[
+        ...local.filter(device=>device.state==='device').map(device=>({
+          device,kind:device.server==='wireless'?'wireless':'local',
+          open:()=>GJTransport.connectLocalDevice({device,signal})
+        })),
+        ...usb.map(device=>({device,kind:'usb',open:()=>GJTransport.connectUsb({device,signal})}))
+      ];
+      const preferred=candidates.find(({device,kind})=>device.serial===last?.serial&&
+        kind===last.kind&&device.server===last.server);
+      if(preferred)candidates.unshift(...candidates.splice(candidates.indexOf(preferred),1));
+      for(const candidate of candidates){
+        GJ.checkAbort(signal);
+        try{return await candidate.open();}catch{GJ.checkAbort(signal);}
+      }
+      return null;
+    },'正在检查已连接设备…',{restorePage:true});
+  }
+
+  async function chooseConnection(){
+    const method=await modal('选择连接设备','<p>请选择要使用的连接方式。</p>',[
+      {text:'取消',value:null,secondary:true},
+      {text:'USB 设备',value:'usb'},
+      {text:'本机 / 无线 ADB',value:'local'}
+    ]);
+    if(method==='usb')await connectUsb();
+    if(method==='local')await openWirelessDialog();
+  }
   async function refreshDevices(){if(!librariesReady)return;const devices=await GJTransport.devices();const select=$('device-select');select.replaceChildren();if(driver&&!devices.some(d=>d.serial===driver.serial))select.add(new Option(driver.label||driver.serial,driver.serial));for(const d of devices)select.add(new Option(`${d.name||'Android'} · ${d.serial}`,d.serial));if(!select.options.length)select.add(new Option('尚未选择设备',''));select.value=driver?.serial||select.options[0]?.value||'';return devices;}
-  async function navigate(next){if(!GJ.pages[next])next='home';if(page==='gamepad'&&next!==page)gamepadView.close();page=next;$$('.page').forEach(p=>p.hidden=p.id!=='page-'+page);$$('[data-page]').forEach(b=>{b.classList.toggle('active',b.dataset.page===page);b.setAttribute('aria-current',b.dataset.page===page?'page':'false');});$('sidebar').classList.remove('open');window.scrollTo(0,0);if(driver?.connected)await refreshPage();}
+  function rememberConnectedPage(){
+    if(lastConnectedPage===page)return;
+    lastConnectedPage=page;
+    store.set('lastConnectedPage',page);
+  }
+  async function navigate(next){if(!Object.hasOwn(GJ.pages,next))next='home';if(page==='gamepad'&&next!==page)gamepadView.close();page=next;$$('.page').forEach(p=>p.hidden=p.id!=='page-'+page);$$('[data-page]').forEach(b=>{b.classList.toggle('active',b.dataset.page===page);b.setAttribute('aria-current',b.dataset.page===page?'page':'false');});$('sidebar').classList.remove('open');window.scrollTo(0,0);if(driver?.connected){rememberConnectedPage();await refreshPage();}}
   async function refreshHome(){const token=epoch,info=await service.getInfo();if(token!==epoch)return;boardIdValue=info.board??'—';$$('[data-info]').forEach(el=>{if(el.dataset.info!=='board')el.textContent=info[el.dataset.info]??'—';});renderBoardId();await refreshCpu();}
   async function refreshCpu(){const token=epoch,data=await service.getCpu();if(token!==epoch)return;const grid=$('cpu-grid');grid.replaceChildren();if(!data.length){grid.textContent='当前设备不允许读取 CPU 频率';return;}for(const item of data){const b=document.createElement('button');b.textContent=`CPU ${item.id}: ${item.mhz} MHz`;b.addEventListener('click',()=>perform(async()=>{const text=await service.text(`cat /sys/devices/system/cpu/cpu${item.id}/cpufreq/scaling_available_frequencies`,{log:false});const freqs=text.trim().split(/\s+/).map(Number).filter(Number.isFinite).map(n=>`${Math.round(n/1000)} MHz`);await textDialog(`CPU ${item.id} 可用频率`,freqs.join('\n')||'系统未公开频率表');},b));grid.appendChild(b);}}
   async function refreshDisplay(){const token=epoch,d=await service.getDisplay();if(token!==epoch)return;$('resolution-info').textContent=`分辨率：${d.width?`${d.width} × ${d.height}`:'不可读取'}`;$('density-info').textContent=`显示密度：${d.dpi??'—'} dpi　最小宽度：${d.dp??'—'} dp`;}
@@ -315,7 +384,11 @@ import {GJGamepad} from "./gamepad.js";
   }
   $('modal-close').onclick=()=>closeModal(null);$('modal').addEventListener('cancel',event=>{event.preventDefault();closeModal(null);});$('menu-toggle').onclick=()=>$('sidebar').classList.toggle('open');
   const headerResize=new ResizeObserver(updateHeaderHeight);headerResize.observe(document.querySelector('.topbar'));
-  $('connect-usb').onclick=()=>perform(()=>connectUsb());$('disconnect').onclick=()=>perform(()=>detach());
+  $('connect-usb').onclick=()=>perform(chooseConnection);
+  $('disconnect').onclick=()=>perform(()=>{
+    manualDisconnect=true;
+    return detach();
+  });
 
   $('device-select').onchange=()=>perform(async()=>{const serial=$('device-select').value,devices=await GJTransport.devices();const target=devices.find(d=>d.serial===serial);if(target&&driver?.serial!==serial)await connectUsb(target);});
   $('script-editor').onkeydown=event=>{if(event.key==='Tab'){event.preventDefault();insertScript('  ');}};$('script-editor').oninput=()=>stashScript();
@@ -324,7 +397,11 @@ import {GJGamepad} from "./gamepad.js";
   document.addEventListener('click',event=>{const b=event.target.closest('button');if(!b||b.disabled)return;if(b.dataset.page){perform(()=>navigate(b.dataset.page));return;}if(b.dataset.action&&actions[b.dataset.action]){perform(actions[b.dataset.action],b);return;}if(b.hasAttribute('data-reboot')){perform(async()=>{const mode=b.dataset.reboot;if(await confirm(b.textContent.trim(),`确定对当前设备执行${b.textContent.trim()}？${mode==='edl'?'仅部分高通机型支持 EDL。':''}`,{yes:'执行'})){await service.reboot(mode);await detach();}},b);return;}if(b.dataset.key){perform(()=>service.key(b.dataset.key),b);return;}if(b.dataset.app){perform(()=>packageAction(b.dataset.app),b);return;}if(b.dataset.immersive){perform(async()=>{await service.immersive(b.dataset.immersive,$('immersive-packages').value);toast('沉浸设置已发送');},b);return;}if(b.dataset.batterySet){perform(async()=>{await service.batterySet(b.dataset.batterySet,$(b.dataset.batterySet==='temp'?'battery-temperature':'battery-level').value);await refreshBattery();},b);return;}if(b.dataset.builder)perform(()=>builder(b.dataset.builder));});
   document.addEventListener('change',event=>{const el=event.target;if(el.dataset.setting){try{readSettings();savePreferences();}catch(error){showError(error);}return;}if(el.dataset.batterySource){perform(async()=>{await service.batterySource(el.dataset.batterySource,el.checked);await refreshBattery();},el);return;}if(el.dataset.tune){perform(async()=>{await service.tune(el.dataset.tune,el.value);toast('倍率已更新');},el);}});
   document.addEventListener('input',event=>{const el=event.target;if(el.dataset.tune)$(el.id+'-value').textContent=Number(el.value).toFixed(2).replace(/0+$/,'').replace(/\.$/,'')+'×';});
-  document.addEventListener('visibilitychange',()=>{if(!document.hidden){lastCpu=0;lastFocus=0;lastBattery=0;}});
+  document.addEventListener('visibilitychange',()=>{
+    if(document.hidden)return;
+    lastCpu=0;lastFocus=0;lastBattery=0;
+    scheduleReconnect();
+  });
   for(const [value,label]of Object.entries(GJ.pages))$('setting-start-page').add(new Option(label,value));
   $('google-packages').innerHTML=GJ.google.map(([label,name])=>`<label class="check"><input type="checkbox" data-google="${name}">${label}</label>`).join('');
   $('statusbar-icons').innerHTML=GJ.slots.map(([label,slot])=>`<label class="check"><input type="checkbox" data-icon-slot="${slot}">${label}</label>`).join('')+'<label class="check" style="grid-column:span 2"><input type="checkbox" id="rotation-suggestion">左下角旋转提示</label><label class="check" style="grid-column:span 2"><input type="checkbox" id="clock-seconds">显示时钟秒数</label>';
@@ -335,6 +412,16 @@ import {GJGamepad} from "./gamepad.js";
   gamepadView=new GJGamepad.Controller({page:$('page-gamepad'),controls:$('gamepad-controls'),toggle:$('gamepad-toggle'),status:$('gamepad-status')});
   $('gamepad-toggle').onclick=()=>gamepadView.toggle(driver);
   applyTheme();applyInterfaceScale();syncSettings();renderScripts();syncConnectionUi();await navigate(page);
-  const pollTimer=setInterval(poll,500);window.addEventListener('pagehide',()=>{clearInterval(pollTimer);connectionAbort?.abort(GJ.abortError());runner.stop();terminalView?.dispose();gamepadView.close();driver?.close().catch(()=>{});});
-  let authorizedDevices;try{await GJTransport.load();librariesReady=true;status('请选择连接方式');authorizedDevices=await refreshDevices();}catch(error){status('ADB 依赖加载失败：'+error.message,'error');}syncConnectionUi();if(authorizedDevices)await autoConnectAuthorized(authorizedDevices);
+  const pollTimer=setInterval(poll,500);
+  window.addEventListener('pagehide',event=>{
+    clearTimeout(reconnectTimer);
+    if(event.persisted){pageHideCleanup=detach();return;}
+    clearInterval(pollTimer);connectionAbort?.abort(GJ.abortError());runner.stop();terminalView?.dispose();gamepadView.close();driver?.close().catch(()=>{});
+  });
+  window.addEventListener('pageshow',async event=>{
+    if(event.persisted){await pageHideCleanup;scheduleReconnect();}
+  });
+  try{await GJTransport.load();librariesReady=true;status('请选择连接方式');await refreshDevices().catch(()=>{});}catch(error){status('ADB 依赖加载失败：'+error.message,'error');}
+  syncConnectionUi();
+  await restoreConnection().catch(showError);
 })();
